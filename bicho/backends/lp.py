@@ -66,12 +66,15 @@ class DBLaunchpadIssueExt(object):
     milestone_data_targeted = Unicode()
     milestone_name = Unicode()
     milestone_summary = Unicode()
-    milestone_title = Unicode()
+    #milestone_title = Unicode()
     milestone_web_link = Unicode()
     heat = Int()
     linked_branches = Unicode()
     #messages
     tags = Unicode()
+    duplicate_of = Int()
+    lp_id = Int()
+    duplicates_list = Unicode()
     title = Unicode()
     users_affected_count = Int()
     web_link_standalone = Unicode()
@@ -117,6 +120,9 @@ class DBLaunchpadIssueExtMySQL(DBLaunchpadIssueExt):
                      heat INTEGER UNSIGNED default NULL, \
                      linked_branches VARCHAR(32) default NULL, \
                      tags VARCHAR(32) default NULL, \
+                     duplicate_of INTEGER UNSIGNED default NULL, \
+                     lp_id INTEGER UNSIGNED NOT NULL, \
+                     duplicates_list TEXT default NULL, \
                      title VARCHAR(32) default NULL, \
                      users_affected_count INTEGER UNSIGNED default NULL, \
                      web_link_standalone VARCHAR(256) default NULL, \
@@ -201,6 +207,9 @@ class DBLaunchpadBackend(DBBackend):
         #### TO DO : create comment instances for
         ## issue.set_messages()
 
+            db_issue_ext.duplicate_of = self.__return_int(issue.duplicate_of)
+            db_issue_ext.lp_id = self.__return_int(issue.lp_id)
+            db_issue_ext.duplicates_list = self.__return_unicode(issue.duplicates_list)
             db_issue_ext.tags = self.__return_unicode(issue.tags)
             db_issue_ext.title = self.__return_unicode(issue.title)
             db_issue_ext.users_affected_count = self.__return_int(
@@ -333,6 +342,9 @@ class LaunchpadIssue(Issue):
 
         self.messages = None  # Comment instances (from .bug.messages)
 
+        self.duplicate_of = None
+        self.lp_id = None
+        self.duplicates_list = None
         self.tags = None  # tags of the bug
         self.title = None  # title of the bug (from .bug.title)
 
@@ -658,6 +670,33 @@ class LaunchpadIssue(Issue):
         """
         self.messages = messages
 
+    def set_duplicates_list(self, duplicates_list):
+        """
+        Set the list of duplicate tracker IDs
+
+        @param alias: tracker IDs of the duplicate issues
+        @type alias: C{str}
+        """
+        self.duplicates_list = duplicates_list
+
+    def set_duplicate_of(self, duplicate_of):
+        """
+        Set the duplicate_of of the issue
+
+        @param alias: duplicate_of of the issue
+        @type alias: C{str}
+        """
+        self.duplicate_of = duplicate_of
+
+    def set_lp_id(self, lp_id):
+        """
+        Set the launchpad id of the issue
+
+        @param alias: lp_id of the issue
+        @type alias: C{str}
+        """
+        self.lp_id = lp_id
+
     def set_tags(self, tags):
         """
         Set the tags of the issue
@@ -842,13 +881,17 @@ class LPBackend(Backend):
 
         try:
             if bug.bug.duplicate_of:
+                duplicate_of = bug.bug.duplicate_of
+                issue.set_duplicate_of(duplicate_of.id)
                 temp_rel = TempRelationship(bug.bug.id,
                                             unicode('duplicate_of'),
-                                            unicode(bug.bug.duplicate_of.id))
+                                            unicode(duplicate_of.id))
                 issue.add_temp_relationship(temp_rel)
         except NotFound:
             printdbg("Issue %s is a duplicate of a private issue. Ignoring the private issue." % issue.issue)
 
+
+        issue.set_lp_id(bug.bug.id)
         issue.set_heat(bug.bug.heat)
         issue.set_linked_branches(bug.bug.linked_branches)
 
@@ -864,6 +907,12 @@ class LPBackend(Backend):
                 by = self._get_person(c.owner)
                 com = Comment(c.content, by, c.date_created)
                 issue.add_comment(com)
+                
+        if (bug.bug.duplicates and len(bug.bug.duplicates) > 1):
+            duplicates_list = list()
+            for d in bug.bug.duplicates:
+                duplicates_list.append(str(d.id))
+            issue.set_duplicates_list(" ".join(duplicates_list))
 
         issue.set_tags(bug.bug.tags)
         issue.set_title(bug.bug.title)
@@ -955,12 +1004,7 @@ class LPBackend(Backend):
             if bug.web_link in analyzed:
                 continue  # for the bizarre error #338
 
-            try:
-                issue_data = self.analyze_bug(bug)
-            except Exception, e:
-                printerr("Error in function analyzeBug with URL: ' \
-                         '%s and Bug: %s" % (str(dbtrk.url), bug))
-                raise e
+            issue_data = self.analyze_bug(bug)
 
             try:
                 bugsdb.insert_issue(issue_data, dbtrk.id)
@@ -1039,11 +1083,13 @@ class LPBackend(Backend):
                 bugs = p.searchTasks(status=aux_status,
                                      omit_duplicates=False,
                                      order_by='date_last_updated',
-                                     modified_since=last_mod_date)
+                                     modified_since=last_mod_date,
+                                     tags='apport-crash')
             else:
                 bugs = p.searchTasks(status=aux_status,
                                      omit_duplicates=False,
-                                     order_by='date_last_updated')
+                                     order_by='date_last_updated',
+                                     tags='apport-crash')
 
             printdbg("Last bug already cached: %s" % last_mod_date)
 
